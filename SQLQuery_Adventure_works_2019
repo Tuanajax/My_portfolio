@@ -1,0 +1,69 @@
+/****** Script for SelectTopNRows command from SSMS  ******/
+/* Total sales*/
+
+select CONCAT('Total sales: ', sum(lineTotal)) from Sales.SalesOrderDetail
+
+/* Best seller*/
+
+select CONCAT('Total of customer: ',sum	(distinct(salesorderid))) from Sales.SalesOrderDetail
+
+select coalesce((convert(varchar,YEAR(modifieddate))),'Grand Total') 'Year',coalesce((convert(varchar,MONTH(modifieddate))),'Total'), sum(lineTotal) Sales from Sales.SalesOrderDetail
+group by rollup(YEAR(modifieddate),MONTH(modifieddate))
+
+/*Compare each fiscalyear*/
+
+With CTE as (
+	select YEAR(modifieddate) 'Year', sum(linetotal) Sales,concat(round(sum(lineTotal)*100/(select SUM(lineTotal) from Sales.SalesOrderDetail),2),'%') 'Percentage' from Sales.SalesOrderDetail
+	group by YEAR(modifieddate)
+)
+select *, concat(round((Sales - LAG(sales,1,0) over (order by Year))*100/Sales,2),'%') compare from CTE
+
+/*product sales per year (from 2011 to 2014)*/
+
+select p.name name ,
+coalesce(sum(case when year(s.ModifiedDate) = 2011 then s.lineTotal end),0) as '2011',
+coalesce(sum(case when year(s.ModifiedDate) = 2012 then s.lineTotal end),0) as '2012',
+coalesce(sum(case when year(s.ModifiedDate) = 2013 then s.lineTotal end),0)as '2013',
+coalesce(sum(case when year(s.ModifiedDate) = 2014 then s.lineTotal end),0) as '2014'
+from Sales.SalesOrderDetail s
+join Production.Product p on s.ProductID = p.ProductID
+group by p.name
+
+/* create view*/
+
+CREATE VIEW sales AS
+select sd.ModifiedDate Date,sd.SalesOrderID ID,so.SalesPersonID,st.name country,pp.Name production,c.Name category,sd.LineTotal Sales  from Sales.SalesOrderDetail sd 
+join Sales.SalesOrderHeader so on sd.SalesOrderID = so.SalesOrderID
+join Sales.SalesTerritory st on  st.TerritoryID = so.TerritoryID
+join Production.Product pp on pp.ProductID = sd.ProductID
+join Production.Product a on a.ProductID = sd.ProductID
+join Production.ProductSubcategory b on a.ProductSubcategoryID = b.ProductSubcategoryID
+join Production.ProductCategory c on b.ProductCategoryID = c.ProductCategoryID
+
+drop view sales
+
+declare @a int
+set @a = (select sum(sales) from sales)
+select country, round(SUM(Sales)/COUNT(distinct(id)),2) 'sale per customer', concat(ROUND(SUM(sales)*100/@a,2),'%') percentage from sales
+group by country
+order by round(SUM(Sales)/COUNT(distinct(id)),2) desc
+
+/* Creating procedure to show top 5 of product of each country */
+
+CREATE PROCEDURE Top5pro @Country nvarchar(30)
+AS
+with CTE as ( 
+select country, Production, SUM(sales) sales from Sales
+group by country, Production),
+CTE2 as ( select country, Production, sales, ROW_NUMBER() over (partition by country order by sales desc) rank from CTE)
+select rank,country, Production, sales from CTE2
+where rank < 6 and country = @Country
+EXEC Top5pro @country = 'Australia'
+
+/*percentage of category each country */
+
+with CTE as (select country, category, sum(sales) sales from Sales group by country, category),
+CTE1 as (select country, category, count(distinct(id)) Amount_customer  from Sales group by country, category)
+
+select a.country, a.category,a.sales,b.Amount_customer, concat(round((sales*100/sum(a.sales) over (partition by a.country)),2),'%') percentage from CTE a
+join CTE1 b on a.country = b.country and a.category = b.category  
